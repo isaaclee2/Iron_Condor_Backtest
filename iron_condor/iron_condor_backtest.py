@@ -245,7 +245,7 @@ def graph_portfolio(portfolio_df):
     plt.axhline(y=INITIAL_CAPITAL, color='gray', linestyle='--', alpha=0.5)
     plt.xlabel('Date')
     plt.ylabel('Portfolio Value ($)')
-    plt.title('Portfolio Equity')
+    plt.title(f'Portfolio Equity (DTE: {DTE}, DELTAS: CALL({CALL_DELTA_TARGET}), PUT({PUT_DELTA_TARGET}))')
     plt.grid(True, alpha=0.2)
     plt.tight_layout()
     plt.savefig('portfolio_returns.png', dpi=150)
