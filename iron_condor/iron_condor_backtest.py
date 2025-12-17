@@ -8,7 +8,7 @@ import webbrowser
 import re
 import matplotlib.pyplot as plt
 
-DTE = 15
+DTE = 3
 ENTRY_TIME = 103000
 CALL_DELTA_TARGET = 0.25
 PUT_DELTA_TARGET = 0.25
@@ -144,11 +144,49 @@ def display_df(ic_df):
     webbrowser.open(full_path)
 
 def get_position_mtm_value(ic_row, day):
+    day = day.strftime('%Y%m%d')
+    path = f'/Users/isaaclee/overture/SPXW_minute_split/{day}/160000.csv.zst'
+    try:
+        today_data = pd.read_csv(path, compression='zstd')
+    except FileNotFoundError:
+        return 0
     
-    return
+    expiration = ic_row['expiration_date'].strftime('%Y%m%d')
+
+    trade_data = today_data[today_data['expiration'] == int(expiration)]
+    if trade_data.empty:
+        return 0
+    
+    short_calls = trade_data[(trade_data['option_type'] == 'C') & (trade_data['strike'] == ic_row['short_call_strike'])]
+    long_calls  = trade_data[(trade_data['option_type'] == 'C') & (trade_data['strike'] == ic_row['long_call_strike'])]
+    short_puts  = trade_data[(trade_data['option_type'] == 'P') & (trade_data['strike'] == ic_row['short_put_strike'])]
+    long_puts   = trade_data[(trade_data['option_type'] == 'P') & (trade_data['strike'] == ic_row['long_put_strike'])]
+
+    if(short_calls.empty or long_calls.empty or short_puts.empty or long_puts.empty):
+        # print("Could not find short/long call/put for MTM")
+        return 0
+
+    short_call_asks = short_calls[short_calls['ask'] > 0]['ask'] # buy back short
+    long_call_bids  = long_calls[long_calls['bid'] > 0]['bid'] # sell long
+    short_put_asks  = short_puts[short_puts['ask'] > 0]['ask']
+    long_put_bids  = long_puts[long_puts['bid'] > 0]['bid']
+    
+    if(short_call_asks.empty or long_call_bids.empty or short_put_asks.empty or long_put_bids.empty):
+        # print("Could not find asks/bids for MTM")
+        return 0
+    
+    short_call_cost = short_call_asks.min()
+    long_call_value  = long_call_bids.max()
+    short_put_cost  = short_put_asks.min()
+    long_put_value   = long_put_bids.max()
+
+    closing_value = (long_call_value + long_put_value) - (short_call_cost + short_put_cost)
+    unrealized_pnl = (ic_row['net_premium'] - closing_value)*100
+    return unrealized_pnl
 
 def simulate_portfolio(ic_df, initial_capital=INITIAL_CAPITAL):
     portfolio_start = ic_df['entry_date'].min()
+    # portfolio_end = ic_df['entry_date'].max() # dont have data for dates after the last entry
     portfolio_end = ic_df['expiration_date'].max()
     trading_days = pd.date_range(portfolio_start, portfolio_end, freq=US_business_days)
 
@@ -158,6 +196,14 @@ def simulate_portfolio(ic_df, initial_capital=INITIAL_CAPITAL):
     cash = initial_capital
     portfolio_history = []
     open_trades = set()
+
+    portfolio_history.append({
+        'date': portfolio_start- (1*US_business_days), # day before we make first trade
+        'cash': initial_capital,
+        'open_trades': 0,
+        'margin_locked': 0,
+        'unrealized_pnl': 0
+    })
 
     for day in trading_days:
         day = day.normalize()
@@ -185,11 +231,12 @@ def simulate_portfolio(ic_df, initial_capital=INITIAL_CAPITAL):
             'date': day,
             'cash': cash,
             'open_trades': len(open_trades),
-            'margin_locked': sum(ic_df['max_loss'].iloc[list(open_trades)]) if open_trades else 0
+            'margin_locked': sum(ic_df['max_loss'].iloc[list(open_trades)]) if open_trades else 0,
+            'unrealized_pnl': mtm_value
         })
     
     portfolio_df = pd.DataFrame(portfolio_history)
-    portfolio_df['equity'] = round((portfolio_df['cash'] + portfolio_df['margin_locked']),2)
+    portfolio_df['equity'] = round((portfolio_df['cash'] + portfolio_df['margin_locked'] + portfolio_df['unrealized_pnl']),2)
     return portfolio_df
 
 def graph_portfolio(portfolio_df):
@@ -206,11 +253,15 @@ def graph_portfolio(portfolio_df):
 
 if __name__ == "__main__":
     data_directory = '/Users/isaaclee/overture/SPXW_minute_split'
-    all_dates = sorted([d for d in os.listdir(data_directory) if d.isdigit()])
-    split = int(len(all_dates)*0.7)
+    dates = sorted([d for d in os.listdir(data_directory) if d.isdigit()])
+
+    last_date = pd.to_datetime(dates[-1], format='%Y%m%d')
+    cutoff_date = last_date - (DTE * US_business_days) # only make trade if we have data for the future (for MTM calculations)
+
+    dates = [d for d in dates if pd.to_datetime(d, format='%Y%m%d') <= cutoff_date]
 
     iron_condors = [] 
-    for entry_date in all_dates:
+    for entry_date in dates:
         df = pd.read_csv(f'/Users/isaaclee/overture/SPXW_minute_split/{entry_date}/{ENTRY_TIME}.csv.zst', compression='zstd')
         
         target_date = add_trading_days(entry_date, DTE)
@@ -226,7 +277,7 @@ if __name__ == "__main__":
     
     ic_df = pd.DataFrame([ic.to_dict() for ic in iron_condors])
 
-    spx_close = get_spx_closing_prices(all_dates, ic_df)
+    spx_close = get_spx_closing_prices(dates, ic_df)
     ic_df = ic_df.merge(spx_close, left_on='expiration_date', right_index=True, how='left')
     ic_df = ic_df.rename(columns={'^SPX' : 'closing_price_at_expiration'})
 
