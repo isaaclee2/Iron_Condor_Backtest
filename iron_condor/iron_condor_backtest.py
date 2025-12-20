@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 
 DTE = 3
 ENTRY_TIME = 103000
-CALL_DELTA_TARGET = 0.25
-PUT_DELTA_TARGET = 0.25
+CALL_DELTA_TARGET = 0.3
+PUT_DELTA_TARGET = 0.3
 SPREAD = 150
 US_business_days= CustomBusinessDay(calendar=USFederalHolidayCalendar())
 
@@ -145,7 +145,7 @@ def display_df(ic_df):
 
 def get_position_mtm_value(ic_row, day):
     day = day.strftime('%Y%m%d')
-    path = f'/Users/isaaclee/overture/SPXW_minute_split/{day}/160000.csv.zst'
+    path = f'/Volumes/SSD/SPX_minute_split_2019-2020/{day}/160000.csv.zst'
     try:
         today_data = pd.read_csv(path, compression='zstd')
     except FileNotFoundError:
@@ -239,6 +239,26 @@ def simulate_portfolio(ic_df, initial_capital=INITIAL_CAPITAL):
     portfolio_df['equity'] = round((portfolio_df['cash'] + portfolio_df['margin_locked'] + portfolio_df['unrealized_pnl']),2)
     return portfolio_df
 
+def compute_metrics(portfolio_df):
+    df = portfolio_df.copy()
+    df = df.set_index('date')
+    df['returns'] = df['equity'].pct_change().fillna(0) # daily returns
+
+    trading_days_per_year = 252
+
+    total_return = (df['equity'].iloc[-1] - INITIAL_CAPITAL) / INITIAL_CAPITAL
+
+    num_years = (portfolio_df['date'].iloc[-1] - portfolio_df['date'].iloc[0]).days / 365.25
+    avg_annual_returns = ((portfolio_df['equity'].iloc[-1] / INITIAL_CAPITAL) ** (1/num_years)) - 1
+
+    sharpe_ratio = (df['returns'].mean() / df['returns'].std()) * (trading_days_per_year ** 0.5) # assuming Rf = 0
+
+    return {
+        "Total Returns": round(total_return*100, 2),
+        "Annualized Returns": round(avg_annual_returns*100, 2),
+        "Sharpe Ratio": round(sharpe_ratio,2)
+    }
+
 def graph_portfolio(portfolio_df):
     plt.figure(figsize=(12, 6))
     plt.plot(portfolio_df['date'], portfolio_df['equity'], linewidth=2, color='black')
@@ -252,7 +272,7 @@ def graph_portfolio(portfolio_df):
     plt.show()
 
 if __name__ == "__main__":
-    data_directory = '/Users/isaaclee/overture/SPXW_minute_split'
+    data_directory = '/Volumes/SSD/SPX_minute_split_2019-2020'
     dates = sorted([d for d in os.listdir(data_directory) if d.isdigit()])
 
     last_date = pd.to_datetime(dates[-1], format='%Y%m%d')
@@ -262,7 +282,7 @@ if __name__ == "__main__":
 
     iron_condors = [] 
     for entry_date in dates:
-        df = pd.read_csv(f'/Users/isaaclee/overture/SPXW_minute_split/{entry_date}/{ENTRY_TIME}.csv.zst', compression='zstd')
+        df = pd.read_csv(f'{data_directory}/{entry_date}/{ENTRY_TIME}.csv.zst', compression='zstd')
         
         target_date = add_trading_days(entry_date, DTE)
         filtered_df = df[df['expiration'] == int(target_date)] 
@@ -286,15 +306,14 @@ if __name__ == "__main__":
     ic_df['expiration_date'] = pd.to_datetime(ic_df['expiration_date'], format='%Y%m%d')
     print("="*50)
     print(f"TOTAL P&L: {ic_df['pnl_dollars'].sum()}")
-    display_df(ic_df)
+    # display_df(ic_df)
 
     ic_df['max_loss'] = (ic_df[['call_spread', 'put_spread']].max(axis=1) - ic_df['net_premium'])*100
     ic_df['taken'] = False
     portfolio_df = simulate_portfolio(ic_df)
+
+    metrics = compute_metrics(portfolio_df)
+    for k,v in metrics.items():
+        print(f"{k}: {v}")
+
     graph_portfolio(portfolio_df)
-
-
-    
-
-
-
